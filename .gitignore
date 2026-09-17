@@ -1,0 +1,48 @@
+# Rust build output
+target/
+
+# Python virtual environments / caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Python packaging
+build/
+dist/
+wheels/
+*.egg-info
+.python-version
+
+# Logs / experiment output
+logs/
+logdir/
+wandb/
+agents/
+nohup.out
+MUJOCO_LOG.TXT
+
+# Large model / data artifacts
+*.onnx
+*.pt
+*.pth
+*.npz
+data/
+artifacts/
+beyondmimic_motions/
+backup_onnx/
+claude_experiments/
+
+# Signing material — never commit private keys
+*.key
+*.pem
+secret*
+!*.pub
+
+# Release output / scratch
+/dist
+/staged
+/verify
+
+# Backups
+*.bak
