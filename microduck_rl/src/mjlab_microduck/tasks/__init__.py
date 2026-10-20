@@ -27,6 +27,9 @@ from .microduck_velocity_env_cfg import (
     make_microduck_velocity_env_cfg,
     MicroduckRlCfg,
 )
+from .microduck_velocity13_env_cfg import (
+    make_microduck_velocity13_env_cfg,
+)
 from .microduck_standup_env_cfg import (
     make_microduck_standup_env_cfg,
     MicroduckStandUpRlCfg,
@@ -90,6 +93,15 @@ register_mjlab_task(
     task_id="Mjlab-Velocity-Rough-MicroDuck",
     env_cfg=make_microduck_velocity_env_cfg(rough=True),
     play_env_cfg=make_microduck_velocity_env_cfg(play=True, rough=True),
+    rl_cfg=MicroduckRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
+# 13-DoF bench robot (no head-yaw servo): forward/backward only.
+register_mjlab_task(
+    task_id="Mjlab-Velocity-Flat-MicroDuck13",
+    env_cfg=make_microduck_velocity13_env_cfg(),
+    play_env_cfg=make_microduck_velocity13_env_cfg(play=True),
     rl_cfg=MicroduckRlCfg,
     runner_cls=MicroduckOnPolicyRunner,
 )

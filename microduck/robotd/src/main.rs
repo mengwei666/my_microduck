@@ -203,6 +203,14 @@ impl LimpFall {
     }
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum BusKind {
+    /// Dynamixel protocol 2.0 — the shipped Microduck's bus.
+    Dynamixel,
+    /// Feetech SCS series (SCS225), one serial port, ids 1..=13.
+    Scs,
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "robotd", about = "Robot control daemon", version)]
 struct Args {
@@ -218,6 +226,11 @@ struct Args {
     /// Serial port override, for a board wired differently from the shipped default.
     #[arg(long)]
     port: Option<String>,
+
+    /// Which motor bus to speak. `dynamixel` is the shipped Microduck; `scs` is a Feetech
+    /// SCS series bus (13 SCS225 servos, ids 1..=13) as used on the RK3588 bench port.
+    #[arg(long, value_enum, default_value = "dynamixel")]
+    bus: BusKind,
 
     /// Run against a robot made of nothing. For laptop development and tests — there is no
     /// simulator yet, and this is what stands in for one.
@@ -900,7 +913,7 @@ async fn main() -> ExitCode {
     }
 
     if let Some(Command::Init { duration }) = args.command {
-        return run_init(&params, duration);
+        return run_init(&params, duration, args.bus);
     }
 
     let state = Arc::new(RobotState::new(
@@ -970,8 +983,8 @@ async fn main() -> ExitCode {
 
 /// Enable torque and ramp to the home pose.
 #[cfg(target_os = "linux")]
-fn run_init(params: &Params, duration: Duration) -> ExitCode {
-    let mut io = match duck_control::bus::DynamixelIo::open(&params.bus.port) {
+fn run_init(params: &Params, duration: Duration, bus: BusKind) -> ExitCode {
+    let mut io = match open_selected_bus(&params.bus.port, bus) {
         Ok(io) => io,
         Err(e) => {
             tracing::error!(error = %e, port = %params.bus.port, "cannot open the bus");
@@ -1008,7 +1021,7 @@ fn run_init(params: &Params, duration: Duration) -> ExitCode {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn run_init(_params: &Params, _duration: Duration) -> ExitCode {
+fn run_init(_params: &Params, _duration: Duration, _bus: BusKind) -> ExitCode {
     tracing::error!("init needs a real bus; this build is not on the robot");
     ExitCode::FAILURE
 }
@@ -1028,6 +1041,7 @@ fn spawn_control_thread(
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     let period = params.period();
     let fake = args.fake;
+    let bus = args.bus;
     let port = params.bus.port.clone();
     let params = params.clone();
     // So a reload can re-read `[policy]` without a restart. The path rather than the loaded
@@ -1072,7 +1086,7 @@ fn spawn_control_thread(
             // loop has not completed a cycle yet", forever, whatever happened to the robot
             // afterwards. Retrying the read alone was not enough: execution never got there.
             runtime.block_on(async move {
-                if let Some(io) = open_bus_waiting(&port, &state).await {
+                if let Some(io) = open_bus_waiting(&port, &state, bus).await {
                     control_loop(io, state, intents, params, params_path, period, poweroff).await;
                 }
             });
@@ -1080,8 +1094,129 @@ fn spawn_control_thread(
 }
 
 /// The real bus on the board; a fake elsewhere, so `open_bus_waiting` has one signature.
+///
+/// One enum rather than a type alias because the port now carries two protocols: the
+/// shipped Dynamixel bus and the Feetech SCS bus used by the RK3588 bench port. Every
+/// method delegates, so nothing above this line knows which one is open.
 #[cfg(target_os = "linux")]
-type BusIo = duck_control::bus::DynamixelIo;
+enum BusIo {
+    Dynamixel(duck_control::bus::DynamixelIo),
+    Scs(duck_control::scs::ScsIo),
+}
+
+/// The SCS wiring: servos on ids 1..=13, skipping the two joints this robot does not have.
+///
+/// Servo `1 + i` drives `SCS_JOINT_SLOTS[i]`. The machine has no mouth (slot 9) and no head
+/// yaw (slot 7), so those two slots are left at zero and never commanded; every other joint
+/// keeps the shipped Microduck index so a policy trained for this joint order can be swapped
+/// in later without a remap.
+#[cfg(target_os = "linux")]
+const SCS_JOINT_SLOTS: [usize; 13] = [0, 1, 2, 3, 4, 5, 6, 8, 10, 11, 12, 13, 14];
+
+/// The MPU6050 on the RK3588 bench port: JP5 `P1_A0`/`P1_A1` are I2C2, AD0 tied to ground.
+#[cfg(target_os = "linux")]
+const SCS_IMU_I2C: &str = "/dev/i2c-2";
+#[cfg(target_os = "linux")]
+const SCS_IMU_ADDR: u16 = 0x68;
+
+#[cfg(target_os = "linux")]
+fn open_scs(port: &str) -> duck_control::io::Result<duck_control::scs::ScsIo> {
+    let ids: Vec<u8> = (1..=13).collect();
+    let slots: Vec<usize> = SCS_JOINT_SLOTS.to_vec();
+    let mut io = duck_control::scs::ScsIo::open(port, 1_000_000, ids, slots)?;
+    match duck_control::mpu6050::Mpu6050::open(SCS_IMU_I2C, SCS_IMU_ADDR) {
+        Ok(imu) => io.attach_imu(imu),
+        Err(e) => tracing::warn!(
+            error = %e,
+            bus = SCS_IMU_I2C,
+            "no IMU on the bus; orientation will be a default, not a measurement"
+        ),
+    }
+    Ok(io)
+}
+
+#[cfg(target_os = "linux")]
+fn open_selected_bus(port: &str, bus: BusKind) -> duck_control::io::Result<BusIo> {
+    match bus {
+        BusKind::Dynamixel => duck_control::bus::DynamixelIo::open(port).map(BusIo::Dynamixel),
+        BusKind::Scs => open_scs(port).map(BusIo::Scs),
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl BusIo {
+    fn check_registers(&mut self) -> duck_control::io::Result<usize> {
+        match self {
+            BusIo::Dynamixel(io) => io.check_registers(),
+            BusIo::Scs(io) => io.check_registers(),
+        }
+    }
+
+    fn interpolate_to(
+        &mut self,
+        target: &[f64; duck_control::NUM_JOINTS],
+        duration: Duration,
+        step: Duration,
+    ) -> duck_control::io::Result<()> {
+        match self {
+            BusIo::Dynamixel(io) => io.interpolate_to(target, duration, step),
+            BusIo::Scs(io) => io.interpolate_to(target, duration, step),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl RobotIo for BusIo {
+    fn read(&mut self) -> duck_control::io::Result<duck_control::io::Sensors> {
+        match self {
+            BusIo::Dynamixel(io) => io.read(),
+            BusIo::Scs(io) => io.read(),
+        }
+    }
+
+    fn write(&mut self, targets: &duck_control::io::JointTargets) -> duck_control::io::Result<()> {
+        match self {
+            BusIo::Dynamixel(io) => io.write(targets),
+            BusIo::Scs(io) => io.write(targets),
+        }
+    }
+
+    fn set_gain(&mut self, kp: u16) -> duck_control::io::Result<()> {
+        match self {
+            BusIo::Dynamixel(io) => io.set_gain(kp),
+            BusIo::Scs(io) => io.set_gain(kp),
+        }
+    }
+
+    fn set_torque(&mut self, on: bool) -> duck_control::io::Result<()> {
+        match self {
+            BusIo::Dynamixel(io) => io.set_torque(on),
+            BusIo::Scs(io) => io.set_torque(on),
+        }
+    }
+
+    fn slow_sensors(&mut self) -> duck_control::io::Result<duck_control::io::SlowSensors> {
+        match self {
+            BusIo::Dynamixel(io) => io.slow_sensors(),
+            BusIo::Scs(io) => io.slow_sensors(),
+        }
+    }
+
+    fn imu_stale(&self) -> duck_control::io::ImuStale {
+        match self {
+            BusIo::Dynamixel(io) => io.imu_stale(),
+            BusIo::Scs(io) => io.imu_stale(),
+        }
+    }
+
+    fn imu_ready(&self) -> bool {
+        match self {
+            BusIo::Dynamixel(io) => io.imu_ready(),
+            BusIo::Scs(io) => io.imu_ready(),
+        }
+    }
+}
+
 #[cfg(not(target_os = "linux"))]
 type BusIo = FakeIo;
 
@@ -1092,13 +1227,13 @@ type BusIo = FakeIo;
 /// one to abandon the control loop over.
 ///
 /// Returns `None` only if shutdown is requested while waiting.
-async fn open_bus_waiting(port: &str, state: &RobotState) -> Option<BusIo> {
+async fn open_bus_waiting(port: &str, state: &RobotState, bus: BusKind) -> Option<BusIo> {
     let mut attempt = 0u32;
 
     while !state.shutdown.load(Ordering::Relaxed) {
         // Logging lives in `open_bus`, which is chatty by design on the first attempt and
         // quiet thereafter — a board waiting overnight must not fill the journal.
-        if let Some(io) = open_bus(port, attempt) {
+        if let Some(io) = open_bus(port, attempt, bus) {
             state.startup_bus_failures.store(0, Ordering::Relaxed);
             return Some(io);
         }
@@ -1118,11 +1253,11 @@ async fn open_bus_waiting(port: &str, state: &RobotState) -> Option<BusIo> {
 
 /// Open and verify the bus, or explain why not.
 #[cfg(target_os = "linux")]
-fn open_bus(port: &str, attempt: u32) -> Option<BusIo> {
+fn open_bus(port: &str, attempt: u32, bus: BusKind) -> Option<BusIo> {
     // First attempt and every thirtieth — about one line per 30 s while waiting.
     let loud = attempt == 0 || attempt.is_multiple_of(STARTUP_READ_LOG_EVERY);
 
-    let mut io = match duck_control::bus::DynamixelIo::open(port) {
+    let mut io = match open_selected_bus(port, bus) {
         Ok(io) => io,
         Err(e) => {
             if loud {
@@ -1149,7 +1284,7 @@ fn open_bus(port: &str, attempt: u32) -> Option<BusIo> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn open_bus(_port: &str, _attempt: u32) -> Option<BusIo> {
+fn open_bus(_port: &str, _attempt: u32, _bus: BusKind) -> Option<BusIo> {
     tracing::error!("no bus on this platform; use --fake");
     None
 }
@@ -6238,7 +6373,7 @@ mod tests {
         ));
         let waiter_state = Arc::clone(&s);
         let handle = tokio::spawn(async move {
-            open_bus_waiting("/dev/definitely-not-a-bus", &waiter_state)
+            open_bus_waiting("/dev/definitely-not-a-bus", &waiter_state, BusKind::Dynamixel)
                 .await
                 .is_none()
         });

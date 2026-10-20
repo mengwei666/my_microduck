@@ -1,0 +1,9 @@
+[FreeCAD Console mode <Use Ctrl-D (i.e. EOF) to exit.>]
+>>> Adding snap-specific PYTHONPATH to sys.path: /home/mw/snap/freecad/common/.local/lib/python3.12/site-packages:/snap/freecad/2741/lib/python3.12/site-packages:/snap/freecad/2741/usr/lib/python3/dist-packages
+MISSING left_upper_leg_左上腿-FT.STEP
+MISSING leg_腿部-FT.STEP
+MISSING yaw2roll_偏航转横滚-FT.STEP
+MISSING bearing_roll_轴承滚轮-FT.STEP
+MISSING ankle_left_脚踝左-FT.STEP
+MISSING 01-upper_leg_rigidity_plate_上腿加固板-FT.STEP
+>>> 

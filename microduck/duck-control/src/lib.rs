@@ -9,8 +9,10 @@
 
 pub mod bus;
 pub mod fall;
+pub mod scs;
 pub mod imu;
 pub mod io;
+pub mod mpu6050;
 pub mod model;
 pub mod obs;
 pub mod policy;

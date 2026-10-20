@@ -31,6 +31,9 @@ ort = { version = "=2.0.0-rc.11", default-features = false, features = ["load-dy
 # reads below — every one of `bus`'s — decoded garbage. A present current of -1 is enough to
 # trigger it, so this is a correctness bound on the bus, not a version bump for its own sake.
 rustypot = "1.6.0"
+# The MPU6050 on the RK3588 bench port rides I2C, not the motor bus. Pure Rust, an
+# ioctl wrapper, so the aarch64 cross-build needs no cross libi2c.
+i2cdev = "0.6"
 # `default-features = false` drops serialport's `libudev` feature, which exists only for
 # enumerating ports (`available_ports`). We open one by path from the params file and never
 # enumerate — and libudev-sys needs a pkg-config sysroot that the board's cross-build does

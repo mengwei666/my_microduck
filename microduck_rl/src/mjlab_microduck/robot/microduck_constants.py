@@ -14,6 +14,9 @@ from mjlab.utils.spec_config import CollisionCfg
 _ROBOT_DIR: Path = Path(os.path.dirname(__file__)) / "microduck"
 
 MICRODUCK_WALK_XML: Path = _ROBOT_DIR / "robot_walk.xml"
+# The 13-DoF bench robot: no head-yaw servo, so that actuator is gone and the joint is
+# pinned at zero by an equality in the XML. Everything else is the walk model.
+MICRODUCK_WALK_13DOF_XML: Path = _ROBOT_DIR / "robot_walk_13dof.xml"
 # Ground-contact model (formerly "allcollisions"): curated collision set for
 # the parts that touch the floor in body-on-ground tasks (soles, legs, trunk
 # shells, head shells, jaw, battery, hips) — NOT every geom. Shared by
@@ -35,6 +38,7 @@ MICRODUCK_WALK_BACKLASH_XML: Path = _ROBOT_DIR / "robot_walk_backlash.xml"
 MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML: Path = _ROBOT_DIR / "robot_groundcontact_rollers_backlash.xml"
 
 assert MICRODUCK_WALK_XML.exists(), f"XML not found: {MICRODUCK_WALK_XML}"
+assert MICRODUCK_WALK_13DOF_XML.exists(), f"XML not found: {MICRODUCK_WALK_13DOF_XML}"
 assert MICRODUCK_GROUNDCONTACT_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_XML}"
 assert MICRODUCK_ALLCOLLISIONS_XML.exists(), f"XML not found: {MICRODUCK_ALLCOLLISIONS_XML}"
 assert MICRODUCK_BALL_XML.exists(), f"XML not found: {MICRODUCK_BALL_XML}"
@@ -46,6 +50,10 @@ assert MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML.exists(), f"XML not found: {
 
 def get_walk_spec() -> mujoco.MjSpec:
     return mujoco.MjSpec.from_file(str(MICRODUCK_WALK_XML))
+
+
+def get_walk_13dof_spec() -> mujoco.MjSpec:
+    return mujoco.MjSpec.from_file(str(MICRODUCK_WALK_13DOF_XML))
 
 
 def get_standup_spec() -> mujoco.MjSpec:
@@ -170,6 +178,17 @@ BACKLASH_HOME_FRAME = EntityCfg.InitialStateCfg(
 
 MICRODUCK_WALK_ROBOT_CFG = EntityCfg(
     spec_fn=get_walk_spec,
+    init_state=HOME_FRAME,
+    collisions=(FULL_COLLISION,),
+    articulation=EntityArticulationInfoCfg(
+        actuators=(actuators,),
+        soft_joint_pos_limit_factor=0.9,
+    ),
+)
+
+# 13 actuated DoF: the walk robot without the head-yaw servo (joint pinned in the XML).
+MICRODUCK_WALK_13DOF_ROBOT_CFG = EntityCfg(
+    spec_fn=get_walk_13dof_spec,
     init_state=HOME_FRAME,
     collisions=(FULL_COLLISION,),
     articulation=EntityArticulationInfoCfg(
